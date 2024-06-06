@@ -1,0 +1,65 @@
+/console/api/datasets/init
+    1、如果索引方式是 high_quality ，则判断是否有 Embedding 模型，然后调用 save_document_without_dataset_id 方法
+    2、如果索引方式是 high_quality，则需要为 dataset 创建一个 dataset_collection_binding，获取到 dataset_collection_binding_id
+         如果索引方式不是 high_quality，则 dataset_collection_binding_id 为 None
+    3、同理，如果索引方式是 high_quality，则需要获取到 embedding_model 和 retrieval_model
+         如果索引方式不是 high_quality，则 embedding_model，retrieval_model 为 None
+    4、创建 DataSet，需要用到上述的 retrieval_model，collection_binding_id，embedding_model 等参数
+    5、调用 save_document_with_dataset_id 方法
+    6、如果 dataset 为空，则更新dataset 的 data_source_type，indexing_technique
+    7、绑定当前 dataset 的 ProcessRule，便于后续用到
+    8、如果当前文件是上传的，那么循环上传的文件列表创建或更新 document
+            根据文件名称，dataset id，租户名称等进行查询，如果有则更新 document，没有则新建 document
+            将之前就有的 document 的 id 放入 duplicate_document_ids 中，新建的 document id 放入 document_ids 中
+    9、将新建的 document 列表传入  document_indexing_task 异步任务中
+    10、将更新的 document 列表传入 duplicate_document_indexing_task 异步任务中
+
+document_indexing_task
+    1、根据传入的 dataset_id 获取 dataset 对象
+    2、判断一些限制
+    3、根据传入的 document_ids，循环更新 document 对象，更新 indexing_status 为 parsing，更新 processing_started_at 时间
+    4、初始化 IndexingRunner，执行 run 方法，传入 documents 对象列表
+    5、查询 DatasetProcessRule 的 processing_rule。得到 处理规则
+    6、根据 index_type 获取到 index_processor 对象。
+    7、调用 self._extract 提取文本，返回值为 list[Document]
+            self._extract 底层调用 index_processor.extract，最终调用 ExtractProcessor.extract
+            更新 after_indexing_status 值为 splitting
+    8、将提取出的 list[Document] 传入 self._transform
+            self._transform 底层调用 index_processor.transform
+    9、transform 中首先根据 process_rule 获取到一个 splitter
+    10、循环传入的 documents 列表（步骤7提取的结果）
+            在循环中，第一步调用 CleanProcessor.clean 清除额外信息（空格，邮箱，用户可在前端选择）
+            第二步调用 splitter.split_documents([document])，创建 Document 对象。这里叫做 document_nodes
+            第三步为每个 Document 对象赋予一个 doc_id 和 doc_hash 值。并且去除文字中的句号
+    11、返回 all_documents ，里面是所有处理好的 Document，是一个列表
+    12、调用  self._load_segments(dataset, dataset_document, documents)，documents 是 11 步的返回结果
+            创建一个 DatasetDocumentStore 实例
+            调用 add_documents 方法，将 documents 列表中的每条数据，采用 create or update 的策略保存为一个 DocumentSegment 对象
+    13、更新 document 的 after_indexing_status 值为 indexing，更新 segment 的状态为 indexing
+    14、调用 self._load
+            新启一个线程，用于创建关键字索引，执行的方法为 self._process_keyword_index
+                    self._process_keyword_index 中先获取了dataset 对象，然后创建一个 Keyword 实例。
+                            Keyword.create 使用 Jieba分词 进行关键词的提取，并且将关键词保存到 document_segment 对象中
+                                    最后将关键词保存到数据库中，或者文件系统中
+                    将之前标记的 indexing 状态的 DocumentSegment 的状态更新为 completed
+            创建一个线程池，执行 self._process_chunk 方法
+                    self._process_chunk 先预估大致会消耗的 token 的数量
+                    调用 index_processor.load，底层调用 ParagraphIndexProcessor.load
+                            load 先是创建 Vector 实例，然后调用 create 方法创建 embeddings
+                                    第一步：调用 embed_documents，会根据每个 document.page_content  的hash值，使用的模型，provider 的名称来判断该段文件之前是否向量化过
+                                            如果已经向量化过了，那么直接从数据库中查询结果即可。否则将文档下标标记加入一个 embedding_queue_indices 列表中
+                                            如果没有向量化，那么获取到当前模型的 max_chunks，按照 max_chunks 拆分这个文本，得到每次向量化的 chunk 内容
+                                            然后调用 self._model_instance.invoke_text_embedding 方法进行对应模型的，向量化接口的调用。会调用 invoke 方法，然后调用 self._invoke。self._invoke 对应的就是每个模型实例的向量化接口的具体实现
+                                            得到向量化的结果后，会和文本的 hash 值进行绑定，最终存储在 Embedding 表中。会记录 模型名称，provider，hash值，pickle 序列化后的 embedding 值。
+                                            如此往复，直到所有文本都向量化结束，最后返回所有向量列表，向量值的顺序就是文本的顺序
+                                    第二步：得到向量结果后（可能是新生成的，也可能是直接从数据库获取到以前的）需要把向量保存到向量数据库中
+                                            调用 self._vector_processor.create 方法，create 是一个抽象方法，下面有很多的向量数据库的具体实现
+                                            这里有个疑问？假如文本相同，那么向量数据库中会存储相同的数据，不会进行去重判断？
+                                            如果一段文本进行不同模型的向量化，那的确是可能的。那如何防止同一段文本，同一种模型，保存重复的结果呢?
+                    将 DocumentSegment 状态从 indexing 更新为 completed
+            更新 document 的 after_indexing_status 状态为 completed
+
+
+
+
+
