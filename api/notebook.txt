@@ -14,6 +14,7 @@
     9、将新建的 document 列表传入  document_indexing_task 异步任务中
     10、将更新的 document 列表传入 duplicate_document_indexing_task 异步任务中
 
+
 document_indexing_task
     1、根据传入的 dataset_id 获取 dataset 对象
     2、判断一些限制
@@ -28,6 +29,7 @@ document_indexing_task
             self._transform 底层调用 index_processor.transform
     9、transform 中首先根据 process_rule 获取到一个 splitter
     10、循环传入的 documents 列表（步骤7提取的结果）
+            在循环中为每个 document 对象添加 doc_id 和 doc_hash 的元数据。doc_id 是 uuid，doc_hash 则是根据内容计算的
             在循环中，第一步调用 CleanProcessor.clean 清除额外信息（空格，邮箱，用户可在前端选择）
             第二步调用 splitter.split_documents([document])，创建 Document 对象。这里叫做 document_nodes
             第三步为每个 Document 对象赋予一个 doc_id 和 doc_hash 值。并且去除文字中的句号
@@ -58,6 +60,52 @@ document_indexing_task
                                             如果一段文本进行不同模型的向量化，那的确是可能的。那如何防止同一段文本，同一种模型，保存重复的结果呢?
                     将 DocumentSegment 状态从 indexing 更新为 completed
             更新 document 的 after_indexing_status 状态为 completed
+
+
+duplicate_document_indexing_task
+    1、根据传入的 dataset_id 获取 dataset 对象
+    2、判断一些限制
+    3、遍历每一个 document_id, 获取到每一个 document_id 的 DocumentSegment 对象
+    4、获取所有 DocumentSegment 对象的 index_node_id，得到一个 index_node_ids 列表
+    5、调用 index_processor.clean 方法，删除这些 index_node_id
+            clean 方法一个接口，具体的实现中，如果索引技术是 high_quality，则需要删除向量数据库中的数据。
+                    vector.delete_by_ids(node_ids) 方法中，node_ids 就是传入的 index_node_id。会去向量数据库中删除这些数据
+                    在向量数据的插入方法 add_texts 中，也会从 document 对象的 metadata 中提取出 doc_id 进行插入。所以删除的时候就可以根据这些 id 进行查询删除了。
+            如果需要删除 keywords，则也会将 keyword 进行删除
+    6、然后再在数据库中删除这些 segment
+    7、处理完旧数据后，和 document_indexing_task 一样，会创建 IndexingRunner 对象，调用 indexing_runner.run(documents) 方法，传入  documents 对象列表
+    8、接下来就和 document_indexing_task 任务中的步骤5接下来的一致了。
+    9、总结下来就是多了一个删除旧数据的过程（删除向量数据库中的数据和后端缓存中的数据，其中后端的删除中，并没有删除Embedding表中的数据，只是删除了 DocumentSegment 记录）
+
+    index_node_id 是什么时候绑定到 DocumentSegment 中的，又是怎么和向量数据库进行绑定的？因为删除的时候这个ID显得尤为重要？需要根据这个 ID 去向量数据库中进行数据的删除！
+        DocumentSegment 对象 index_node_id 的绑定，是在 document_indexing_task 过程中的，self._load_segments -> add_documents 方法下进行绑定的
+        这里在创建 DocumentSegment 对象的时候，将 index_node_id 的值，设置为了 当前文档元数据中的doc_id，即 doc.metadata['doc_id']。
+
+
+document_indexing_update_task
+    1、传入参数为 dataset_id，document_id。首先获取到 document 对象。
+    2、将 document indexing_status 状态标记为 parsing
+    3、查询 document 对应的 segments 列表，获取到所有的 index_node_id
+    4、调用  index_processor.clean(dataset, index_node_ids) 在向量数据库中删除这些数据
+    5、再在数据库中删除 segments 数据
+    6、最后重新实例化 IndexingRunner 对象，调用 indexing_runner.run([document]) 方法，重新将 document 向量化
+
+
+对比 Langchain 的实现：
+    https://python.langchain.com/v0.1/docs/modules/data_connection/indexing/
+    LangChain 利用记录管理器（RecordManager）来管理索引
+    在索引内容时，会为每个文档计算哈希值，并将以下信息存储在记录管理器中：
+        1、文档哈希（页面内容和元数据的哈希）
+        2、时间
+        3、source id
+    Langchain 提供了三种模式供选择，分别是 None，Incremental，Full
+        None 模式：此模式不会自动清理旧版本的内容；但是，它仍会进行内容重复数据删除。举例：当我进行三份相同文本进行索引时，最终向量数据库中只会有一份。且以前的数据不影响。
+        incremental 模式：对相同文本再次索引时将会被跳过。但是如果对已经存在的索引进行更新，那么则会写入新版本，并删除所有共享同一 source 的旧版本
+        full 模式：任何未传递到索引函数且存在于向量存储中的文档都将被删除。也就是说只会保存当前我提交的，之前的都会被删除。
+
+
+
+
 
 
 
