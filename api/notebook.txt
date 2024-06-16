@@ -104,6 +104,55 @@ document_indexing_update_task
         full 模式：任何未传递到索引函数且存在于向量存储中的文档都将被删除。也就是说只会保存当前我提交的，之前的都会被删除。
 
 
+运行向量化
+    修改 .env 配置文件中的 CELERY_BROKER_URL 为 CELERY_BROKER_URL=redis://:difyai123456@localhost:6379/2
+    celery -A app.celery worker -P gevent -c 1 --loglevel INFO -Q dataset,generation,mail
+    运行后通过接口 /console/api/datasets/bf2d67b6-74bc-498b-8e0e-0c03431461de/batch/20240609135937173902/indexing-status 查询索引状态
+    通过 dataset_id, batch id 获取到 document 列表。然后查询 document 下每个 DocumentSegment 完成状态的个数和总的个数。最后得到一个 documents_status 列表。
+
+
+召回测试
+    接口 /console/api/datasets/bf2d67b6-74bc-498b-8e0e-0c03431461de/hit-testing
+    发起请求时，会传入检索的方式（全文检索，向量检索，混合检索），如果有 reranking_model 模型，还会传入相关信息。然后就是 score_threshold，top_k 等参数
+
+    过程为：
+    1。获取 dataset，并且校验 dataset 的权限，接口参数
+    2. 调用 HitTestingService.retrieve 函数，主要逻辑都是在其中完成的
+    3. 在函数中 首选获取 retrieval_model，如果没有则使用默认的
+    4. 根据 dataset 的 embedding_model_provider 和 embedding_model 获取对应的 embedding_model
+    5. embeddings = CacheEmbedding(embedding_model) 得到一个可缓存的 embedding 对象
+    6. 调用 RetrievalService.retrieve 方法进行检索，传入 retrival_method检索方法，dataset_id，测试的文本query，top_k，score_threshold，reranking_model 等参数
+    7. retrieve 中，首先进行一些简单的校验，校验 dataset 的 document 数量，segment 数量等，如果为0，则就不必继续了
+    8. retrival_method 有几种值：keyword_search（关键字搜索），semantic_search（语义搜索），full_text_search（全文搜索），hybrid_search（混合搜索）
+        如果 retrival_method 为 keyword_search，则启动一个线程，在线程中执行 RetrievalService.keyword_search 方法
+            keyword_search 中，根据 dataset 获取一个 Keyword 实例，然后执行 keyword.search 搜索，得到对应的 documents
+        如果 retrival_method 为 semantic_search 或 hybrid_search，则启动一个线程，在线程中执行 RetrievalService.embedding_search 方法
+            embedding_search 中，根据 dataset 获取一个 Vector 实例，然后执行 vector.search_by_vector 方法
+                 首先对 传入的 query 进行 embedding，这其中使用 redis 进行了缓存，如果 hash 的 key 在 redis 中存在则直接取出，否则调用对应的模型进行 embedding，然后在缓存在 redis 中。这一步的结果的是得到一个 query_vector
+                 调用具体的向量数库的 search_by_vector方法，将上一步得到的 query_vector 传入。然后执行查询，查询得到满足条件的 text，将 text 封装成一个 Document 对象，最后返回一个 Document 列表。
+            如果选择了 reranking_model，那么还会实例话一个数据后处理的 DataPostProcessor，然后执行 data_post_processor.invoke 方法，参数就是上面从向量数据库中查出来的数据，query，score_threshold，top_n
+                DataPostProcessor 中有两种对数据处理的方法，一种是 rerank，另一种是 reorder。rerank 是需要模型的，reorder 不需要。
+                invoke 中会尝试执行这两种方法，先执行rerank，然后再执行 reorder（不过没在代码中看到会让 reorder 执行的地方，reorder_enabled 为 True 才会执行）
+                DataPostProcessor 在实例话的时候，会根据名次和租户ID，获取得到对应的 rerank 模型实例。
+                rerank_runner.run 方法的执行，调用对应 rerank 模型的 invoke_rerank 方法，底层会去调用每个 rerank 模型的接口。最后将得到的 rerank_documents 返回
+                如果使用了reorder，那么将 rerank_documents 传入 reorder_runner 中继续执行。reorder_runner 中 run 方法，将奇数下标的元素保持原有顺序,而偶数下标的元素则被反转。例如 documents = [doc1, doc2, doc3, doc4, doc5, doc6, doc7, doc8]，最后结果为  new_documents = [doc1, doc8, doc3, doc6, doc5, doc4, doc7, doc2]
+                最后将处理好的 document 列表返回
+        如果 retrival_method 为 full_text_search 或 hybrid_search，则启动一个线程，在线程中执行 RetrievalService.full_text_index_search 方法
+            full_text_index_search 中，根据 dataset 获取一个 Vector 实例，然后执行 vector.search_by_full_text 方法得到对应的 documents
+            如果有 reranking_model 模型，则同样执行 DataPostProcessor invoke 方法，进行数据后处理
+    9. 如果 retrival_method 为 hybrid_search，则还会进行一次 DataPostProcessor.invoke，只不过这里的 top_k 是传入的 top_k，而之前的 top_k 是 document 的长度。
+        这里以 https://jina.ai/reranker 的 rerank 模型为例。可以看到 rerank api 的参数。
+    10. 将 all_documents 做为 retrieve 的返回结果，接下来传入到 compact_retrieve_response 当中
+    11. 在 compact_retrieve_response 中，循环 documents，拿去到每一个 document 的 doc_id，然后去查询 DocumentSegment，最后得到的 DocumentSegment 就是从数据库中查询出来的相似的文本片段。最后将结果返回前端。
+
+
+
+
+
+
+
+    
+
 
 
 

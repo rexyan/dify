@@ -886,7 +886,7 @@ class DocumentService:
                     'score_threshold_enabled': False
                 }
                 retrieval_model = default_retrieval_model
-        # save dataset
+        # 创建 Dataset
         dataset = Dataset(
             tenant_id=tenant_id,
             name='',
@@ -901,7 +901,7 @@ class DocumentService:
 
         db.session.add(dataset)
         db.session.flush()
-
+        # 保存 document
         documents, batch = DocumentService.save_document_with_dataset_id(dataset, document_data, account)
 
         cut_length = 18

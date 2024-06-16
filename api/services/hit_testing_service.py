@@ -41,10 +41,12 @@ class HitTestingService:
         start = time.perf_counter()
 
         # get retrieval model , if the model is not setting , using default
+        # 获取 retrieval 模型(如果模型未设置)，使用 default
         if not retrieval_model:
             retrieval_model = dataset.retrieval_model if dataset.retrieval_model else default_retrieval_model
 
         # get embedding model
+        # 根据 dataset 的 embedding_model_provider 和 embedding_model 获取对应的 embedding_model
         model_manager = ModelManager()
         embedding_model = model_manager.get_model_instance(
             tenant_id=dataset.tenant_id,

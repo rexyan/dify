@@ -125,7 +125,7 @@ class RetrievalService:
                 dataset = db.session.query(Dataset).filter(
                     Dataset.id == dataset_id
                 ).first()
-
+                # 根据 dataset 获取一个 Vector 实例
                 vector = Vector(
                     dataset=dataset
                 )

@@ -83,7 +83,9 @@ class PGVector(BaseVector):
     def add_texts(self, documents: list[Document], embeddings: list[list[float]], **kwargs):
         values = []
         pks = []
+        # 循环每一个 documents
         for i, doc in enumerate(documents):
+            # 获取每一个 documents 的元数据中的 doc_id
             doc_id = doc.metadata.get("doc_id", str(uuid.uuid4()))
             pks.append(doc_id)
             values.append(
@@ -95,6 +97,7 @@ class PGVector(BaseVector):
                 )
             )
         with self._get_cursor() as cur:
+            # 插入数据
             psycopg2.extras.execute_values(
                 cur, f"INSERT INTO {self.table_name} (id, text, meta, embedding) VALUES %s", values
             )
