@@ -147,6 +147,58 @@ document_indexing_update_task
 
 
 
+聊天助手
+    接口 console/api/apps/2129de6c-ccff-451e-819e-3e6d665b5e68/chat-messages
+    调用时，会将填写的参数 input，query 问题，response_mode，model_config 等参数传入
+
+    调用 AppGenerateService.generate 方法，方法传入 app_model，user，streaming 等关键参数。方法中对 app_model.mode 进行区分，执行不同的方法
+    这里我们的应用类型是聊天助手，所以 app_model.mode 是 CHAT，所以回调用 ChatAppGenerator().generate 方法
+    ChatAppGenerator 继承自 MessageBasedAppGenerator，MessageBasedAppGenerator 继承自 BaseAppGenerator
+
+    1. ChatAppGenerator().generate 中，先获取 conversation
+    2. 然后根据 app_model 和 conversation 获取 app model config, 如果是 debug 模式，则允许用户传递的 model config 覆盖 据 app_model 和 conversation 查询出来的
+    3. 解析文件得到 file_objs
+    4. 转换为 app config
+    5. 初始化 application generate entity
+    6. 初始化 generate records
+    7. 初始化 queue manager
+    8. 启动线程，调用  _generate_worker 方法
+        8.1 线程中第一步就是根据 conversation_id 和 message_id 获取 conversation 和 message
+        8.2 实例话一个 ChatAppRunner 对象，并调用 run 方法，传入 application_generate_entity，queue_manager，conversation 和 message
+            8.2.1 中先解析出用户的输入自定义变量 inputs，用户的问题 query 和 文件 files
+            8.2.2 判断 token 数量是否足够
+                加载模型实例，获取模型的最大 token 数
+                将用户自定义的变量和问题组合成为一个 prompt，然后计算 prompt 的需要的 token 数
+                最后计算 token 是否足够，不足够则返回异常，够则返回剩余的 token 数量
+            8.2.3 组合输入和模板，得到提示信息
+            8.2.4 进行敏感词检测，如果抛出了ModerationException异常，则直接调用 self.direct_output 然后 return，不再继续
+            8.2.5 annotation reply
+            8.2.6 填写来自外部数据工具的变量输入
+            8.2.7 再次组合输入和模板，得到提示信息
+            8.2.9 check hosting moderation
+            8.2.10 加载工具变量
+            8.2.11 初始化模型实例
+            8.2.12 根据 LLM 模型 调整 function call 策略，得到不同的 AgentRunner
+            8.2.13 实例化 AgentRunner，调用 run 方法。得到结果
+            8.2.14 处理返回结果
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
