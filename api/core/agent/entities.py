@@ -67,7 +67,7 @@ class AgentEntity(BaseModel):
         """
         Agent Strategy.
         """
-        CHAIN_OF_THOUGHT = 'chain-of-thought'
+        CHAIN_OF_THOUGHT = 'chain-of-thought'  # 链式思考
         FUNCTION_CALLING = 'function-calling'
 
     provider: str

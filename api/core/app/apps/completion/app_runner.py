@@ -48,6 +48,11 @@ class CompletionAppRunner(AppRunner):
         # If the rest number of tokens is not enough, raise exception.
         # Include: prompt template, inputs, query(optional), files(optional)
         # Not Include: memory, external data, dataset context
+        """
+        预先计算提示消息的令牌数量，并根据模型上下文令牌大小限制和最大令牌大小限制返回剩余的令牌数量。
+        如果剩余的令牌数量不够，则引发异常。包括:提示模板，输入，查询(可选)，文件(可选)
+                                            不包括:内存，外部数据，数据集上下文
+        """
         self.get_pre_calculate_rest_tokens(
             app_record=app_record,
             model_config=application_generate_entity.model_config,
@@ -59,6 +64,7 @@ class CompletionAppRunner(AppRunner):
 
         # organize all inputs and template to prompt messages
         # Include: prompt template, inputs, query(optional), files(optional)
+        # 组织 prompt message
         prompt_messages, stop = self.organize_prompt_messages(
             app_record=app_record,
             model_config=application_generate_entity.model_config,
@@ -69,6 +75,7 @@ class CompletionAppRunner(AppRunner):
         )
 
         # moderation
+        # 敏感词检测
         try:
             # process sensitive_word_avoidance
             _, inputs, query = self.moderation_for_inputs(
@@ -89,6 +96,7 @@ class CompletionAppRunner(AppRunner):
             return
 
         # fill in variable inputs from external data tools if exists
+        # 填写来自外部数据工具的变量输入
         external_data_tools = app_config.external_data_variables
         if external_data_tools:
             inputs = self.fill_in_inputs_from_external_data_tools(
@@ -100,6 +108,7 @@ class CompletionAppRunner(AppRunner):
             )
 
         # get context from datasets
+        # 获取上下文信息
         context = None
         if app_config.dataset and app_config.dataset.dataset_ids:
             hit_callback = DatasetIndexToolCallbackHandler(
@@ -130,6 +139,7 @@ class CompletionAppRunner(AppRunner):
         # reorganize all inputs and template to prompt messages
         # Include: prompt template, inputs, query(optional), files(optional)
         #          memory(optional), external data, dataset context(optional)
+        # 再次重新组织 prompt message
         prompt_messages, stop = self.organize_prompt_messages(
             app_record=app_record,
             model_config=application_generate_entity.model_config,
@@ -151,6 +161,7 @@ class CompletionAppRunner(AppRunner):
             return
 
         # Re-calculate the max tokens if sum(prompt_token +  max_tokens) over model token limit
+        # 如果sum(prompt_token + max_token)超过模型令牌限制，则重新计算最大令牌
         self.recalc_llm_max_tokens(
             model_config=application_generate_entity.model_config,
             prompt_messages=prompt_messages

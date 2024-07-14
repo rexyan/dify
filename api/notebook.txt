@@ -172,8 +172,35 @@ document_indexing_update_task
                 最后计算 token 是否足够，不足够则返回异常，够则返回剩余的 token 数量
             8.2.3 组合输入和模板，得到提示信息
             8.2.4 进行敏感词检测，如果抛出了ModerationException异常，则直接调用 self.direct_output 然后 return，不再继续
+				敏感词检测是一个 ModerationFactory 工厂函数，调用 moderation_for_inputs 方法，目前支持三种方式，1.API，2.关键词，3.openai
             8.2.5 annotation reply
-            8.2.6 填写来自外部数据工具的变量输入
+				标注回复是可以添加回复，由一个问题和一个答案组成，当用户的问题和标注回复中的问题一致时，那么就返回指定的内容。
+				查询到当前app的AppAnnotationSetting后，获取相关模型的 provider_name，model_name，score_threshold等，然后去向量数据库中查询
+				查询的时候，是使用用户提出的问题去查询，如果项目相似度分数 > score_threshold
+					则取出这个 Document 的 annotation_id，然后到这个 annotation，然后将预设的回复进行返回
+				上述返回后，就往队列里面塞一条消息，就不继续往后执行了
+
+				添加标注回复时，调用 /console/api/apps/xxx/annotations 接口，会往 MessageAnnotation 表中添加记录。
+				并调用 add_annotation_to_index_task 异步方法，异步方法中创建的 Document 的内容为标记回复的问题，元数据中关联了 annotation_id
+				document = Document(
+					page_content=question,
+					metadata={
+						"annotation_id": annotation_id,
+						"app_id": app_id,
+						"doc_id": annotation_id
+					}
+				)
+				
+            8.2.6 填写来自外部数据工具的变量输入，获取下上文信息
+				在调用上下文的 DatasetRetrieval.retrieve 时，判断了模型是否有 TOOL_CALL 或 MULTI_TOOL_CALL 的能力。
+				如果有，则 planning_strategy 为 ROUTER 模式，否则为 REACT_ROUTER 模式 
+				然后在根据用户选择的是N选1召回，还是多路召回，调用不同的方法，分别是 single_retrieve 方法和 multiple_retrieve 方法
+				single_retrieve：
+					当 planning_strategy 为 ROUTER 时：则利用大模型的 FunctionCall 能力，调用 FunctionCallMultiDatasetRouter 方法。
+					如果传入的有效的dataset(界面中选择的知识库)的个数等于0时直接返回None,个数为1则返回dataset的名称,其余情况则使用FunctionCall
+				multiple_retrieve:
+					根据有效的 dataset 的个数，使用相同数量的线程，去线程中查询，得到相关的 documents
+					然后在使用 rerank 模型对相关的 documents 进行排序
             8.2.7 再次组合输入和模板，得到提示信息
             8.2.9 check hosting moderation
             8.2.10 加载工具变量
@@ -182,9 +209,195 @@ document_indexing_update_task
             8.2.13 实例化 AgentRunner，调用 run 方法。得到结果
             8.2.14 处理返回结果
 
+	9. 得到 response
+		9.1 调用  generate_task_pipeline.process() 方法
+			9.1.1 判断类型是否为 COMPLETION，如果是 COMPLETION 则需要为当前对话生成一个名称（新启一个线程实现）
+			9.1.2 继续往下执行 generator = self._process_stream_response() 方法
+				在 _process_stream_response 方法中，使用 queue_manager.listen() 方法监听推送到里面的消息。
+				获取到消息后，根据消息不同的 event 类型进行不同的处理，返回不同的对象，目前 event 类型有：
+					QueueStopEvent，QueueMessageEndEvent，QueueRetrieverResourcesEvent，QueueAnnotationReplyEvent，
+					QueueAgentThoughtEvent，QueueMessageFileEvent，QueueLLMChunkEvent，QueueAgentMessageEvent，
+					QueueLLMChunkEvent，QueueMessageReplaceEvent，QueuePingEvent
+					
+	10. 最后 AgentChatAppGenerateResponseConverter.convert 将上述的 response 转换后返回出去
 
 
 
+
+
+
+文本生成应用
+	调用 /console/api/apps/xxx/completion-messages 接口
+	调用  AppGenerateService.generate 方法，app_model.mode 是 'completion'
+	
+		
+	1. CompletionAppGenerator().generate 中和聊天助手不一样，这里就没有 conversation，所以 conversation 为 None
+	2. 然后根据 app_model 和 conversation 获取 app model config, 如果是 debug 模式，则允许用户传递的 model config 覆盖 app model config
+	3. 解析文件得到 file_objs
+    4. 转换为 app config
+    5. 初始化 application generate entity
+    6. 初始化 generate records
+		 得到一个 conversation 和 message 对象
+    7. 初始化 queue manager
+	8. 启动线程，调用  _generate_worker 方法
+		8.1 线程中第一步就是根据 message_id 获取 message
+		8.2 实例化一个  CompletionAppRunner() 对象，并且调用 run 方法
+			8.2.1 中先解析出用户的输入自定义变量 inputs，用户的问题 query 和 文件 files
+            8.2.2 判断 token 数量是否足够
+                加载模型实例，获取模型的最大 token 数
+                将用户自定义的变量和问题组合成为一个 prompt，然后计算 prompt 的需要的 token 数
+                最后计算 token 是否足够，不足够则返回异常，够则返回剩余的 token 数量
+			8.2.3 组织 prompt message
+			8.2.4 敏感词检测
+			8.2.5 填写来自外部数据工具的变量输入
+			8.2.6 获取上下文信息
+			8.2.7 再次重新组织 prompt message
+			8.2.8 check hosting moderation
+			8.2.9 如果sum(prompt_token + max_token)超过模型令牌限制，则重新计算最大令牌
+			8.2.10 初始化模型实例，得到 model_instance
+			8.2.11 执行 model_instance.invoke_llm 方法，得到 invoke_result
+				8.2.11.1 执行  LargeLanguageModel 的 invoke 方法，这就和之前的一样的了
+			8.2.12 处理 invoke_result
+			
+	9. 得到 response
+	10. 最后 CompletionAppGenerateResponseConverter.convert 将上述的 response 转换后返回出去
+	
+	
+	
+Agent
+	调用 /console/api/apps/xxx/chat-messages接口
+	调用  AgentChatAppGenerator.generate 方法，app_model.mode 是 'agent-chat'
+	
+	1. 如果参数中有 conversation_id 则先获取 conversation
+	2. 根据 conversation 和 app_model 获取 app model config
+	3. 如果是 debug 模式，则允许用户传递的 model config 覆盖  model config 
+	4. 解析文件得到 file_objs 
+	5. 转换为 app config
+	6. 初始化 application generate entity
+	7. 初始化 generate records
+		 得到一个 conversation 和 message 对象
+	8. 初始化 queue manager
+	9. 启动线程，调用  _generate_worker 方法
+		9.1 线程中第一步就是根据 message_id 获取 message 和 根据 conversation_id 获取 conversation
+		9.2 实例化一个  AgentChatAppRunner() 对象，并且调用 run 方法
+			9.2.1 先解析出用户的输入自定义变量 inputs，用户的问题 query 和 文件 files
+			9.2.2 判断 token 数量是否足够
+			9.2.3 组织 prompt message
+			9.2.4 敏感词检测
+			9.2.5 annotation reply 标注回复
+			9.2.6 填写来自外部数据工具的变量输入(如果存在)
+			9.2.7 组织 prompt message
+			9.2.8 check hosting moderation
+			9.2.8 加载工具变量，并将db变量转换为工具变量
+			9.2.9 初始化 model 实例
+			9.2.10 组织 prompt message
+			9.2.11 根据LLM模型确认使用  function call 模式还是 CHAIN_OF_THOUGHT（链式思考模式）
+				如果是 CHAIN_OF_THOUGHT（链式思考）模式，且LLM模式是 CHAT模式，则使用 CotChatAgentRunner
+				如果是 CHAIN_OF_THOUGHT（链式思考）模式，且LLM模式是 COMPLETION模式，则使用 CotCompletionAgentRunner
+
+				如果是 FUNCTION_CALLING 模式，则使用 FunctionCallAgentRunner
+				
+			9.2.12 实例化上述 AgentRunner，并且调用 run 方法，得到 invoke_result
+				- 如果是 FunctionCallAgentRunner 的 run方法
+					第一步就是调用  self._init_prompt_tools 方法，得到  tool_instances, prompt_messages_tools 
+					获取调用的最大步数 max_iteration_steps
+					while 循环运行每一步，直到步数达到 max_iteration_steps，或者 function_call_state 为 False
+						循环第一步会组织 prompt 和 计算 max tokens
+						循环中会先进行大模型的调用，model_instance.invoke_llm 得到 chunks
+						根据大模型是否支持 stream_tool_call 进行不同的处理
+						循环chunks，判断每个 chunk 是否有工具调用（大模型选择出工具）
+						如果没有选择出工具，则大模型返回出什么，就 yield 出什么
+						如果选择出了工具，那么就在下面循环调用每个工具。然后再次进行循环。
+						再次循环时候，prompt 就会更新，带上选出的工具信息，然后再次调用大模型。
+				- 如果是 CotChatAgentRunner 或 CotCompletionAgentRunner 的 run方法 
+					大致流程和上述一致，只是没有了 tools，而是判断是否有 action。如果没有 action，直接返回最终答案
+					否则则判断 action 是否为 final answer。如果不是，则去调用每一个 action。
+					然后重复上述步骤，直到步数达到 max_iteration_steps，或者 function_call_state 为 False
+					
+			9.2.13 调用 self._handle_invoke_result 处理上述 invoke_result
+	10.得到 response
+	11. 最后 AgentChatAppGenerateResponseConverter.convert 将上述的 response 转换后返回出去
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+
+
+	
+问题：
+	1、如果 prompt 的token过长，怎么处理？
+	
+	2、如果 prompt 的 token 不过长，但是加上上下文之后过长怎么处理？
+
+	3、最多可以携带几轮会话历史？
+
+	4、agent 应用中，如果模型不支持 function call 时怎么办？
+
+	5、用户输入和模型输出出现敏感词怎么处理？
+
+	6、怎么添加和拓展工具？
+
+	7、在 Agent 中，如果匹配不到对应的工具类怎么处理？
+
+	
+	
+	
+	
+
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
 
 
 

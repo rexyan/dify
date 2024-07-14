@@ -316,6 +316,7 @@ class FunctionCallAgentRunner(BaseAgentRunner):
     def check_tool_calls(self, llm_result_chunk: LLMResultChunk) -> bool:
         """
         Check if there is any tool call in llm result chunk
+        检查llm结果块中是否有任何工具调用
         """
         if llm_result_chunk.delta.message.tool_calls:
             return True
@@ -349,7 +350,7 @@ class FunctionCallAgentRunner(BaseAgentRunner):
     def extract_blocking_tool_calls(self, llm_result: LLMResult) -> Union[None, list[tuple[str, str, dict[str, Any]]]]:
         """
         Extract blocking tool calls from llm result
-
+        从llm结果中提取阻塞工具调用
         Returns:
             List[Tuple[str, str, Dict[str, Any]]]: [(tool_call_id, tool_call_name, tool_call_args)]
         """

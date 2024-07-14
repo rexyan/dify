@@ -207,8 +207,9 @@ class AgentChatAppRunner(AppRunner):
         db.session.close()
 
         # start agent runner
-        if agent_entity.strategy == AgentEntity.Strategy.CHAIN_OF_THOUGHT:
+        if agent_entity.strategy == AgentEntity.Strategy.CHAIN_OF_THOUGHT:  # 链式思考
             # check LLM mode
+            # 不同模型有不同的 prompt 的格式
             if model_schema.model_properties.get(ModelPropertyKey.MODE) == LLMMode.CHAT.value:
                 runner_cls = CotChatAgentRunner
             elif model_schema.model_properties.get(ModelPropertyKey.MODE) == LLMMode.COMPLETION.value:
