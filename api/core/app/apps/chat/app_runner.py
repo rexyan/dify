@@ -54,7 +54,9 @@ class ChatAppRunner(AppRunner):
         # Not Include: memory, external data, dataset context
         """
         预先计算提示消息的令牌数量，并根据模型上下文令牌大小限制和最大令牌大小限制返回剩余的令牌数量。
-        如果剩余的令牌数量不够，则引发异常。包括:提示模板，输入，查询(可选)，文件(可选)不包括:内存，外部数据，数据集上下文
+        如果剩余的令牌数量不够，则引发异常。
+        包括:提示模板，输入，查询(可选)，文件(可选)
+        不包括:内存，外部数据，数据集上下文
         """
         self.get_pre_calculate_rest_tokens(
             app_record=app_record,

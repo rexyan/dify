@@ -88,8 +88,7 @@ class DatasetRetrieval:
         planning_strategy = PlanningStrategy.REACT_ROUTER
         features = model_schema.features
         if features:
-            if ModelFeature.TOOL_CALL in features \
-                    or ModelFeature.MULTI_TOOL_CALL in features:
+            if ModelFeature.TOOL_CALL in features or ModelFeature.MULTI_TOOL_CALL in features:
                 planning_strategy = PlanningStrategy.ROUTER
         available_datasets = []
         for dataset_id in dataset_ids:
